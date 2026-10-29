@@ -60,6 +60,6 @@
   "remoteControlAtStartup": false,
   "statusLine": {
     "type": "command",
-    "command": "f=$(ls \"$HOME\"/.claude/plugins/cache/caveman/caveman/*/hooks/caveman-statusline.sh 2>/dev/null | tail -1); [ -n \"$f\" ] && bash \"$f\""
+    "command": "\"$HOME/.envs/claude/statusline.sh\""
   }
 }

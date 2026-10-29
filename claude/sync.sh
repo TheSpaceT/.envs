@@ -3,7 +3,12 @@
 #
 #   sync.sh            detach and sync in background (used by SessionStart hook)
 #   sync.sh --fg       sync in foreground
-#   sync.sh --install  link repo files into ~/.claude, repo wins (backs up local to *.bak.<timestamp>)
+#   sync.sh --pull     quick foreground pull before claude starts (see claude.zsh)
+#   sync.sh --install  link repo files into ~/.claude, repo wins (backs up local to *.bak.<timestamp>),
+#                      and source claude.zsh from ~/.zshrc
+#
+# Sync state for the status line is written to $STATE:
+#   ok | pulled (new config, restart claude to apply) | syncing | error: <what>
 #
 # Managed files live in $REPO/claude and are symlinked into ~/.claude.
 # If Claude Code replaces a symlink with a regular file (atomic write),
@@ -14,6 +19,7 @@ REPO="${ENVS_REPO:-$HOME/.envs}"
 SRC="$REPO/claude"
 DST="$HOME/.claude"
 LOG="${XDG_CACHE_HOME:-$HOME/.cache}/claude-envs-sync.log"
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-envs-sync.state"
 MANAGED=(CLAUDE.md RTK.md settings.json skills/grilling)
 
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
@@ -21,11 +27,32 @@ export GIT_TERMINAL_PROMPT=0
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
-# Portable timeout: GNU timeout, coreutils gtimeout on macOS, or none.
+state() {
+  mkdir -p "$(dirname "$STATE")"
+  echo "$*" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+}
+
+# with_timeout SECONDS CMD...: GNU timeout, coreutils gtimeout on macOS, or none.
 with_timeout() {
-  if command -v timeout >/dev/null; then timeout 60 "$@"
-  elif command -v gtimeout >/dev/null; then gtimeout 60 "$@"
+  local t=$1; shift
+  if command -v timeout >/dev/null; then timeout "$t" "$@"
+  elif command -v gtimeout >/dev/null; then gtimeout "$t" "$@"
   else "$@"; fi
+}
+
+lock() {
+  # mkdir-based lock (flock is not available on macOS); stale after 10 min.
+  LOCK="$REPO/.git/claude-sync.lock.d"
+  find "$LOCK" -maxdepth 0 -mmin +10 -exec rm -rf {} + 2>/dev/null
+  mkdir "$LOCK" 2>/dev/null || return 1
+  trap 'rm -rf "$LOCK"' EXIT
+}
+
+pull() {
+  if ! with_timeout "$1" git pull -q --rebase --autostash; then
+    git rebase --abort 2>/dev/null
+    return 1
+  fi
 }
 
 # link REL MODE: MODE=local (local file wins) or repo (repo file wins)
@@ -59,6 +86,18 @@ link_all() {
 case "${1:-}" in
   --install)
     link_all repo
+    line='[ -f "$HOME/.envs/claude/claude.zsh" ] && source "$HOME/.envs/claude/claude.zsh"'
+    grep -qF "$line" "$HOME/.zshrc" 2>/dev/null || echo "$line" >>"$HOME/.zshrc"
+    exit 0
+    ;;
+  --pull)
+    # Runs before claude starts, so pulled config applies to this session.
+    cd "$REPO" && lock || exit 0
+    export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=3"
+    if pull 5 2>/dev/null; then
+      link_all local >>"$LOG"
+      state ok
+    fi
     exit 0
     ;;
   --fg) ;;
@@ -74,11 +113,8 @@ case "${1:-}" in
 esac
 
 cd "$REPO" || exit 1
-# mkdir-based lock (flock is not available on macOS); stale after 10 min.
-LOCK="$REPO/.git/claude-sync.lock.d"
-find "$LOCK" -maxdepth 0 -mmin +10 -exec rm -rf {} + 2>/dev/null
-mkdir "$LOCK" 2>/dev/null || exit 0
-trap 'rm -rf "$LOCK"' EXIT
+lock || exit 0
+state syncing
 
 link_all local
 
@@ -87,9 +123,10 @@ if ! git diff --cached --quiet; then
   git commit -q -m "chore(claude): sync from $(hostname)" && log "committed local changes"
 fi
 
-if ! with_timeout git pull -q --rebase --autostash; then
-  git rebase --abort 2>/dev/null
+before=$(git rev-parse HEAD)
+if ! pull 60; then
   log "pull failed, resolve manually in $REPO"
+  state "error: pull"
   exit 1
 fi
 
@@ -97,5 +134,20 @@ fi
 link_all local
 
 if [[ -n "$(git log --oneline '@{u}..' 2>/dev/null)" ]]; then
-  with_timeout git push -q && log "pushed" || log "push failed"
+  if with_timeout 60 git push -q; then
+    log "pushed"
+  else
+    log "push failed"
+    state "error: push"
+    exit 1
+  fi
+fi
+
+# Local commits are already in $before, so this diff is upstream changes only;
+# they apply after claude restarts.
+if ! git diff --quiet "$before" HEAD -- claude; then
+  log "pulled new config, restart claude to apply"
+  state pulled
+else
+  state ok
 fi
