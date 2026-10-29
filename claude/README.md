@@ -5,16 +5,14 @@ Files here are symlinked into `~/.claude` and kept in sync with this repo:
 - `claude.zsh` — wraps `claude` to `git pull` (5s timeout) before start, so new config applies right away.
 - `sync.sh` — SessionStart hook, runs in background: commit local changes -> `pull --rebase` -> push.
   If Claude Code replaces a symlink with a regular file, the local file is moved back into the repo.
-- `statusline.sh` — status line: `model · dir · branch* · envs state · caveman badge`.
+- `statusline.sh` — status line: context window usage and remaining rate limits.
 
-Envs state in the status line:
+```
+ctx 8% 76k/1M · 5h 87% ↻15:10 · 7d 76% ↻Wed 11:00
+```
 
-| | |
-|-|-|
-| `✓ envs` | in sync |
-| `⟳ envs` | syncing |
-| `↓ envs: restart` | new config pulled mid-session, restart claude to apply |
-| `✗ envs pull/push` | sync failed, see log |
+`ctx` — context used; `5h`/`7d` — limit left, `↻` — reset time.
+Green / yellow / red by usage: < 50% / < 80% / more.
 
 Setup on a new machine:
 

@@ -6,9 +6,7 @@
 #   sync.sh --pull     quick foreground pull before claude starts (see claude.zsh)
 #   sync.sh --install  link repo files into ~/.claude, repo wins (backs up local to *.bak.<timestamp>),
 #                      and source claude.zsh from ~/.zshrc
-#
-# Sync state for the status line is written to $STATE:
-#   ok | pulled (new config, restart claude to apply) | syncing | error: <what>
+
 #
 # Managed files live in $REPO/claude and are symlinked into ~/.claude.
 # If Claude Code replaces a symlink with a regular file (atomic write),
@@ -19,18 +17,12 @@ REPO="${ENVS_REPO:-$HOME/.envs}"
 SRC="$REPO/claude"
 DST="$HOME/.claude"
 LOG="${XDG_CACHE_HOME:-$HOME/.cache}/claude-envs-sync.log"
-STATE="${XDG_CACHE_HOME:-$HOME/.cache}/claude-envs-sync.state"
 MANAGED=(CLAUDE.md RTK.md settings.json skills/grilling)
 
 export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=10"
 export GIT_TERMINAL_PROMPT=0
 
 log() { echo "[$(date '+%F %T')] $*"; }
-
-state() {
-  mkdir -p "$(dirname "$STATE")"
-  echo "$*" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
-}
 
 # with_timeout SECONDS CMD...: GNU timeout, coreutils gtimeout on macOS, or none.
 with_timeout() {
@@ -94,10 +86,7 @@ case "${1:-}" in
     # Runs before claude starts, so pulled config applies to this session.
     cd "$REPO" && lock || exit 0
     export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=3"
-    if pull 5 2>/dev/null; then
-      link_all local >>"$LOG"
-      state ok
-    fi
+    pull 5 2>/dev/null && link_all local >>"$LOG"
     exit 0
     ;;
   --fg) ;;
@@ -114,7 +103,6 @@ esac
 
 cd "$REPO" || exit 1
 lock || exit 0
-state syncing
 
 link_all local
 
@@ -126,7 +114,6 @@ fi
 before=$(git rev-parse HEAD)
 if ! pull 60; then
   log "pull failed, resolve manually in $REPO"
-  state "error: pull"
   exit 1
 fi
 
@@ -134,20 +121,8 @@ fi
 link_all local
 
 if [[ -n "$(git log --oneline '@{u}..' 2>/dev/null)" ]]; then
-  if with_timeout 60 git push -q; then
-    log "pushed"
-  else
-    log "push failed"
-    state "error: push"
-    exit 1
-  fi
+  with_timeout 60 git push -q && log "pushed" || log "push failed"
 fi
 
-# Local commits are already in $before, so this diff is upstream changes only;
-# they apply after claude restarts.
-if ! git diff --quiet "$before" HEAD -- claude; then
-  log "pulled new config, restart claude to apply"
-  state pulled
-else
-  state ok
-fi
+# Local commits are already in $before, so this diff is upstream changes only.
+git diff --quiet "$before" HEAD -- claude || log "pulled new config, restart claude to apply"

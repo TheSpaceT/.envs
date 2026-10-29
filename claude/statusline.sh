@@ -1,42 +1,66 @@
 #!/usr/bin/env bash
-# Claude Code status line: model · dir · git branch · .envs sync state · caveman badge.
+# Claude Code status line: context window usage and remaining rate limits.
+#   ctx 7% 73k/1M · 5h 88% ↻15:30 · 7d 76% ↻Mon 12:00
 # Reads session JSON from stdin.
 input=$(cat)
 
-field() {
-  if command -v jq >/dev/null; then
-    jq -r "$1 // empty" <<<"$input" 2>/dev/null
-  else
-    python3 -c 'import json,sys; d=json.load(sys.stdin)
-for k in sys.argv[1].lstrip(".").split("."): d=(d or {}).get(k)
-print(d or "")' "$1" <<<"$input" 2>/dev/null
-  fi
-}
+# ctx used %, ctx tokens, ctx size, 5h used %, 5h reset, 7d used %, 7d reset
+if command -v jq >/dev/null; then
+  row=$(jq -r '[.context_window.used_percentage, .context_window.total_input_tokens,
+    .context_window.context_window_size,
+    .rate_limits.five_hour.used_percentage, .rate_limits.five_hour.resets_at,
+    .rate_limits.seven_day.used_percentage, .rate_limits.seven_day.resets_at]
+    | map(. // "" | tostring) | join("\t")' <<<"$input" 2>/dev/null)
+else
+  row=$(python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+def g(path):
+    v = d
+    for k in path.split("."):
+        v = (v or {}).get(k)
+    return "" if v is None else str(v)
+print("\t".join(g(p) for p in [
+    "context_window.used_percentage", "context_window.total_input_tokens",
+    "context_window.context_window_size",
+    "rate_limits.five_hour.used_percentage", "rate_limits.five_hour.resets_at",
+    "rate_limits.seven_day.used_percentage", "rate_limits.seven_day.resets_at"]))
+' <<<"$input" 2>/dev/null)
+fi
+IFS=$'\t' read -r ctx_pct ctx_tok ctx_size h5_pct h5_reset d7_pct d7_reset <<<"$row"
 
 c() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
-SEP=$(c 90 ' · ')
 
-model=$(field .model.display_name)
-dir=$(field .workspace.current_dir)
-[[ -z "$dir" ]] && dir=$PWD
+# Color by how much is used: green < 50, yellow < 80, red otherwise.
+level() {
+  local p=${1%.*}
+  if (( p < 50 )); then echo 32; elif (( p < 80 )); then echo 33; else echo 31; fi
+}
 
-out=$(c 1 "${model:-claude}")
-out+="$SEP$(c 34 "${dir##*/}")"
+human() {
+  local n=${1%.*}
+  if (( n >= 1000000 )); then echo "$((n / 1000000))M"
+  elif (( n >= 1000 )); then echo "$((n / 1000))k"
+  else echo "$n"; fi
+}
 
-if branch=$(git -C "$dir" --no-optional-locks branch --show-current 2>/dev/null) && [[ -n "$branch" ]]; then
-  dirty=$(git -C "$dir" --no-optional-locks status --porcelain -uno 2>/dev/null | head -1)
-  out+="$SEP$(c 35 "$branch${dirty:+*}")"
+# Unix time -> local time, GNU date or BSD date (macOS).
+at() { date -d "@$1" +"$2" 2>/dev/null || date -r "$1" +"$2" 2>/dev/null; }
+
+parts=()
+if [[ -n "$ctx_pct" ]]; then
+  ctx="ctx ${ctx_pct%.*}%"
+  [[ -n "$ctx_tok" && -n "$ctx_size" ]] && ctx+=" $(human "$ctx_tok")/$(human "$ctx_size")"
+  parts+=("$(c "$(level "$ctx_pct")" "$ctx")")
+fi
+if [[ -n "$h5_pct" ]]; then
+  parts+=("$(c "$(level "$h5_pct")" "5h $((100 - ${h5_pct%.*}))%")$(c 90 " ↻$(at "$h5_reset" %H:%M)")")
+fi
+if [[ -n "$d7_pct" ]]; then
+  parts+=("$(c "$(level "$d7_pct")" "7d $((100 - ${d7_pct%.*}))%")$(c 90 " ↻$(at "$d7_reset" '%a %H:%M')")")
 fi
 
-state=$(cat "${XDG_CACHE_HOME:-$HOME/.cache}/claude-envs-sync.state" 2>/dev/null)
-case "$state" in
-  ok)       out+="$SEP$(c 32 '✓ envs')" ;;
-  syncing)  out+="$SEP$(c 33 '⟳ envs')" ;;
-  pulled)   out+="$SEP$(c 36 '↓ envs: restart')" ;;
-  error*)   out+="$SEP$(c 31 "✗ envs ${state#error: }")" ;;
-esac
-
-badge=$(ls "$HOME"/.claude/plugins/cache/caveman/caveman/*/hooks/caveman-statusline.sh 2>/dev/null | tail -1)
-[[ -n "$badge" ]] && out+=" $(bash "$badge")"
-
+sep=$(c 90 ' · ')
+out=""
+for p in ${parts[@]+"${parts[@]}"}; do out+="${out:+$sep}$p"; done
 printf '%s' "$out"
