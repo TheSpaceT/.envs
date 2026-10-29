@@ -4,3 +4,5 @@
 # But not these files/folders:
 !.gitignore
 !.tmux.conf
+!claude/
+!claude/**
