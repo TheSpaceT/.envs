@@ -21,10 +21,17 @@ export GIT_TERMINAL_PROMPT=0
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
+# Portable timeout: GNU timeout, coreutils gtimeout on macOS, or none.
+with_timeout() {
+  if command -v timeout >/dev/null; then timeout 60 "$@"
+  elif command -v gtimeout >/dev/null; then gtimeout 60 "$@"
+  else "$@"; fi
+}
+
 # link REL MODE: MODE=local (local file wins) or repo (repo file wins)
 link() {
   local rel=$1 mode=$2 src="$SRC/$1" dst="$DST/$1"
-  if [[ -L "$dst" && "$(readlink -f "$dst")" == "$(readlink -f "$src")" ]]; then
+  if [[ -L "$dst" && "$(readlink "$dst")" == "$src" ]]; then
     return
   fi
   mkdir -p "$(dirname "$dst")" "$(dirname "$src")"
@@ -57,14 +64,21 @@ case "${1:-}" in
   --fg) ;;
   *)
     mkdir -p "$(dirname "$LOG")"
-    setsid nohup "$0" --fg >>"$LOG" 2>&1 </dev/null &
+    if command -v setsid >/dev/null; then
+      setsid nohup "$0" --fg >>"$LOG" 2>&1 </dev/null &
+    else
+      nohup "$0" --fg >>"$LOG" 2>&1 </dev/null &
+    fi
     exit 0
     ;;
 esac
 
 cd "$REPO" || exit 1
-exec 9>"$REPO/.git/claude-sync.lock"
-flock -n 9 || exit 0
+# mkdir-based lock (flock is not available on macOS); stale after 10 min.
+LOCK="$REPO/.git/claude-sync.lock.d"
+find "$LOCK" -maxdepth 0 -mmin +10 -exec rm -rf {} + 2>/dev/null
+mkdir "$LOCK" 2>/dev/null || exit 0
+trap 'rm -rf "$LOCK"' EXIT
 
 link_all local
 
@@ -73,7 +87,7 @@ if ! git diff --cached --quiet; then
   git commit -q -m "chore(claude): sync from $(hostname)" && log "committed local changes"
 fi
 
-if ! timeout 60 git pull -q --rebase --autostash; then
+if ! with_timeout git pull -q --rebase --autostash; then
   git rebase --abort 2>/dev/null
   log "pull failed, resolve manually in $REPO"
   exit 1
@@ -83,5 +97,5 @@ fi
 link_all local
 
 if [[ -n "$(git log --oneline '@{u}..' 2>/dev/null)" ]]; then
-  timeout 60 git push -q && log "pushed" || log "push failed"
+  with_timeout git push -q && log "pushed" || log "push failed"
 fi

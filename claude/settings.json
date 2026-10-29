@@ -10,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/thespacetime/.envs/claude/sync.sh"
+            "command": "\"$HOME/.envs/claude/sync.sh\""
           }
         ]
       }
@@ -21,7 +21,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/thespacetime/.claude/hooks/rtk-rewrite.sh"
+            "command": "\"$HOME/.claude/hooks/rtk-rewrite.sh\""
           }
         ]
       }
@@ -60,6 +60,6 @@
   "remoteControlAtStartup": false,
   "statusLine": {
     "type": "command",
-    "command": "bash \"/home/thespacetime/.claude/plugins/cache/caveman/caveman/c2ed24b3e5d4/hooks/caveman-statusline.sh\""
+    "command": "f=$(ls \"$HOME\"/.claude/plugins/cache/caveman/caveman/*/hooks/caveman-statusline.sh 2>/dev/null | tail -1); [ -n \"$f\" ] && bash \"$f\""
   }
 }
