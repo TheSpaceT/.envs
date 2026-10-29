@@ -16,7 +16,7 @@ git clone git@github.com:TheSpaceT/.envs.git ~/.envs
 ln -s ~/.envs/.tmux.conf ~/.tmux.conf
 
 # Claude Code
-~/.envs/claude/sync.sh --install
+~/.envs/claude/sync.sh --install   # also hooks claude wrapper into ~/.zshrc
 rtk init -g
 ```
 
