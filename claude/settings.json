@@ -27,6 +27,10 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "\"$HOME/.envs/claude/statusline.sh\""
+  },
   "enabledPlugins": {
     "caveman@caveman": true,
     "rust-analyzer-lsp@claude-plugins-official": true,
@@ -58,8 +62,5 @@
   "tui": "fullscreen",
   "editorMode": "vim",
   "remoteControlAtStartup": false,
-  "statusLine": {
-    "type": "command",
-    "command": "\"$HOME/.envs/claude/statusline.sh\""
-  }
+  "fileCheckpointingEnabled": false
 }
