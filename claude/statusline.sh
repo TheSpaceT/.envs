@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Claude Code status line: context window usage and remaining rate limits.
-#   ctx 7% 73k/1M · 5h 88% ↻15:30 · 7d 76% ↻Mon 12:00
+# Claude Code status line: robbyrussell-style prompt, model, context window
+# usage and remaining rate limits.
+#   ➜  repo git:(main) ✗ · Opus 5.5 · ctx 7% 73k/1M · 5h 88% ↻15:30 · 7d 76% ↻Mon 12:00
 # Reads session JSON from stdin.
 input=$(cat)
 
 # ctx used %, ctx tokens, ctx size, 5h used %, 5h reset, 7d used %, 7d reset
 if command -v jq >/dev/null; then
-  row=$(jq -r '[.context_window.used_percentage, .context_window.total_input_tokens,
+  row=$(jq -r '[.workspace.current_dir // .cwd, .model.display_name,
+    .context_window.used_percentage, .context_window.total_input_tokens,
     .context_window.context_window_size,
     .rate_limits.five_hour.used_percentage, .rate_limits.five_hour.resets_at,
     .rate_limits.seven_day.used_percentage, .rate_limits.seven_day.resets_at]
@@ -21,13 +23,14 @@ def g(path):
         v = (v or {}).get(k)
     return "" if v is None else str(v)
 print("\t".join(g(p) for p in [
+    "workspace.current_dir", "model.display_name",
     "context_window.used_percentage", "context_window.total_input_tokens",
     "context_window.context_window_size",
     "rate_limits.five_hour.used_percentage", "rate_limits.five_hour.resets_at",
     "rate_limits.seven_day.used_percentage", "rate_limits.seven_day.resets_at"]))
 ' <<<"$input" 2>/dev/null)
 fi
-IFS=$'\t' read -r ctx_pct ctx_tok ctx_size h5_pct h5_reset d7_pct d7_reset <<<"$row"
+IFS=$'\t' read -r cwd model ctx_pct ctx_tok ctx_size h5_pct h5_reset d7_pct d7_reset <<<"$row"
 
 c() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
 
@@ -48,6 +51,18 @@ human() {
 at() { date -d "@$1" +"$2" 2>/dev/null || date -r "$1" +"$2" 2>/dev/null; }
 
 parts=()
+
+# robbyrussell: ➜  dir git:(branch) ✗
+[[ -z "$cwd" ]] && cwd=$PWD
+prompt="$(c '1;32' '➜')  $(c '1;36' "${cwd##*/}")"
+if branch=$(git -C "$cwd" symbolic-ref --short -q HEAD 2>/dev/null ||
+            git -C "$cwd" rev-parse --short -q HEAD 2>/dev/null); then
+  prompt+=" $(c '1;34' 'git:(')$(c 31 "$branch")$(c '1;34' ')')"
+  [[ -n $(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null | head -1) ]] &&
+    prompt+=" $(c 33 '✗')"
+fi
+parts+=("$prompt")
+[[ -n "$model" ]] && parts+=("$(c 35 "$model")")
 if [[ -n "$ctx_pct" ]]; then
   ctx="ctx ${ctx_pct%.*}%"
   [[ -n "$ctx_tok" && -n "$ctx_size" ]] && ctx+=" $(human "$ctx_tok")/$(human "$ctx_size")"
